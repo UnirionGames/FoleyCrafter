@@ -324,7 +324,7 @@ with gr.Blocks(css=css) as demo:
                 cfg_scale_slider,
                 seed_textbox,
             ],
-            cache_examples=True,
+            cache_examples=False,
             outputs=[result_video],
             fn=controller.foley,
         )

@@ -8,6 +8,7 @@ output/
 checkpoints/
 train/
 configs/
+tmp/
 
 *.wav
 *.mp3
@@ -19,5 +20,4 @@ configs/
 *.json
 
 *.csv
-*.txt
 *.bin

@@ -44,12 +44,11 @@ Sound effects are the unsung heroes of cinema and gaming, enhancing realism, imp
 ### Prepare Environment
 Use the following command to install dependencies:
 ```bash
-# install conda environment
-conda env create -f requirements/environment.yaml
-conda activate foleycrafter
+# install venv environment
+python -m venv .venv
+./venv/Scripts/activate
 
 # install GIT LFS for checkpoints download
-conda install git-lfs
 git lfs install
 ```
 
