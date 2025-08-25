@@ -41,6 +41,11 @@ Sound effects are the unsung heroes of cinema and gaming, enhancing realism, imp
 
 ## Setup
 
+### Requirements
+```bash
+Python >= 3.10
+```
+
 ### Prepare Environment
 Use the following command to install dependencies:
 ```bash
