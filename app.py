@@ -137,11 +137,11 @@ class FoleyController:
         seed_textbox,
     ):
         device = "cuda"
-        # move heavy models to GPU in half precision while keeping the time
-        # detector on CPU to save memory
+        # move models to GPU (using half precision where possible) to reduce memory usage
         self.pipeline = controller.pipeline.to(device, torch_dtype=torch.float16)
         self.vocoder = controller.vocoder.to(device, dtype=torch.float16)
         self.image_encoder = controller.image_encoder.to(device, dtype=torch.float16)
+        self.time_detector = controller.time_detector.to(device)
         vision_transform_list = [
             torchvision.transforms.Resize((128, 128)),
             torchvision.transforms.CenterCrop((112, 112)),
@@ -158,12 +158,14 @@ class FoleyController:
             duration = 10
 
         with torch.no_grad():
-            # run onset detector on CPU to avoid extra GPU usage
+            # run onset detector on GPU for faster processing
             time_frames = torch.FloatTensor(frames).permute(0, 3, 1, 2)
-            time_frames = video_transform(time_frames)
+            time_frames = video_transform(time_frames).to(device)
             time_frames = {"frames": time_frames.unsqueeze(0).permute(0, 2, 1, 3, 4)}
             preds = self.time_detector(time_frames)
-            preds = torch.sigmoid(preds)
+            preds = torch.sigmoid(preds).cpu()
+            del time_frames
+            torch.cuda.empty_cache()
 
             # duration
             time_condition = [
@@ -209,7 +211,7 @@ class FoleyController:
             audio = self.vocoder.inference(audio, lengths=160000)[0]
             audio_save_path = osp.join(self.savedir_sample, "audio")
             os.makedirs(audio_save_path, exist_ok=True)
-            audio = audio[: int(duration * 16000)].cpu()
+            audio = audio[: int(duration * 16000)]
 
             save_path = osp.join(audio_save_path, f"{name}.wav")
             sf.write(save_path, audio, 16000)
