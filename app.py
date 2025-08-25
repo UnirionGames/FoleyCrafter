@@ -213,15 +213,15 @@ class FoleyController:
             os.makedirs(audio_save_path, exist_ok=True)
             audio = audio[: int(duration * 16000)]
 
-            save_path = osp.join(audio_save_path, f"{name}.wav")
-            sf.write(save_path, audio, 16000)
+            audio_clip_path = osp.join(audio_save_path, f"{name}.wav")
+            sf.write(audio_clip_path, audio, 16000)
 
-            audio_clip = AudioFileClip(osp.join(audio_save_path, f"{name}.wav"))
-            video = VideoFileClip(input_video)
-            audio_clip = audio_clip.subclip(0, duration)
+            video = VideoFileClip(input_video).subclip(0, duration)
+            audio_clip = AudioFileClip(audio_clip_path).subclip(0, duration)
             video.audio = audio_clip
-            video = video.subclip(0, duration)
             video.write_videofile(osp.join(self.savedir_sample, f"{name}.mp4"))
+            audio_clip.close()
+            video.close()
             save_sample_path = os.path.join(self.savedir_sample, f"{name}.mp4")
 
         torch.cuda.empty_cache()

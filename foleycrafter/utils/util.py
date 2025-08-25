@@ -1714,14 +1714,33 @@ def scale(old_value, old_min, old_max, new_min, new_max):
 
 
 def read_frames_with_moviepy(video_path, max_frame_nums=None):
-    clip = VideoFileClip(video_path)
-    duration = clip.duration
-    frames = []
-    for frame in clip.iter_frames():
-        frames.append(frame)
+    """Read video frames with moviepy and ensure resources are closed.
+
+    Parameters
+    ----------
+    video_path: str
+        Path to the video file.
+    max_frame_nums: int, optional
+        If provided, the video is uniformly sampled to this number of frames.
+
+    Returns
+    -------
+    np.ndarray
+        Array of video frames.
+    float
+        Duration of the video in seconds.
+    """
+
+    with VideoFileClip(video_path) as clip:
+        duration = clip.duration
+        frames = [frame for frame in clip.iter_frames()]
+
+    frames = np.array(frames)
     if max_frame_nums is not None:
         frames_idx = np.linspace(0, len(frames) - 1, max_frame_nums, dtype=int)
-    return np.array(frames)[frames_idx, ...], duration
+        frames = frames[frames_idx, ...]
+
+    return frames, duration
 
 
 def read_frames_with_moviepy_resample(video_path, save_path):
