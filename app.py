@@ -94,7 +94,7 @@ class FoleyController:
         time_detector = VideoOnsetNet(False)
         self.time_detector, _ = torch_utils.load_model(time_detector_ckpt, time_detector, strict=True)
 
-        self.pipeline = build_foleycrafter()
+        self.pipeline = build_foleycrafter(pretrained_model_name_or_path)
         ckpt = torch.load(temporal_ckpt_path)
 
         # load temporal adapter

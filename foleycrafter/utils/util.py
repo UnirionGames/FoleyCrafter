@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 import os.path as osp
 import random
@@ -52,9 +53,40 @@ def build_foleycrafter(
     vae = AutoencoderKL.from_pretrained(
         pretrained_model_name_or_path, subfolder="vae", torch_dtype=torch_dtype
     )
-    unet = af_UNet2DConditionModel.from_pretrained(
-        pretrained_model_name_or_path, subfolder="unet", torch_dtype=torch_dtype
-    )
+
+    # Diffusion checkpoints trained with EMA may store extra optimizer
+    # settings in ``config.json`` that the UNet class doesn't recognize.
+    # If the checkpoint directory is available locally, strip these keys
+    # before loading to avoid noisy warning messages.
+    unet_subfolder = "unet"
+    config_path = os.path.join(pretrained_model_name_or_path, unet_subfolder, "config.json")
+    load_path = pretrained_model_name_or_path
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            unet_config = json.load(f)
+        ema_keys = [
+            "decay",
+            "inv_gamma",
+            "min_decay",
+            "optimization_step",
+            "power",
+            "update_after_step",
+            "use_ema_warmup",
+        ]
+        removed = False
+        for k in ema_keys:
+            if k in unet_config:
+                del unet_config[k]
+                removed = True
+        if removed:
+            with open(config_path, "w") as f:
+                json.dump(unet_config, f, indent=2)
+        load_path = os.path.join(pretrained_model_name_or_path, unet_subfolder)
+        unet = af_UNet2DConditionModel.from_pretrained(load_path, torch_dtype=torch_dtype)
+    else:
+        unet = af_UNet2DConditionModel.from_pretrained(
+            pretrained_model_name_or_path, subfolder=unet_subfolder, torch_dtype=torch_dtype
+        )
     scheduler = PNDMScheduler.from_pretrained(
         pretrained_model_name_or_path, subfolder="scheduler"
     )
