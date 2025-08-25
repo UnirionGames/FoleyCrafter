@@ -137,20 +137,18 @@ class FoleyController:
         seed_textbox,
     ):
         device = "cuda"
-        # move to gpu
-        self.time_detector = controller.time_detector.to(device)
-        self.pipeline = controller.pipeline.to(device)
-        self.vocoder = controller.vocoder.to(device)
-        self.image_encoder = controller.image_encoder.to(device)
+        # move heavy models to GPU in half precision while keeping the time
+        # detector on CPU to save memory
+        self.pipeline = controller.pipeline.to(device, torch_dtype=torch.float16)
+        self.vocoder = controller.vocoder.to(device, dtype=torch.float16)
+        self.image_encoder = controller.image_encoder.to(device, dtype=torch.float16)
         vision_transform_list = [
             torchvision.transforms.Resize((128, 128)),
             torchvision.transforms.CenterCrop((112, 112)),
             torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
         video_transform = torchvision.transforms.Compose(vision_transform_list)
-        # if not self.loaded:
-        #     raise gr.Error("Error with loading model")
-        generator = torch.Generator()
+        generator = torch.Generator(device=device)
         if seed_textbox != "":
             torch.manual_seed(int(seed_textbox))
             generator.manual_seed(int(seed_textbox))
@@ -158,60 +156,73 @@ class FoleyController:
         frames, duration = read_frames_with_moviepy(input_video, max_frame_nums=max_frame_nums)
         if duration >= 10:
             duration = 10
-        time_frames = torch.FloatTensor(frames).permute(0, 3, 1, 2).to(device)
-        time_frames = video_transform(time_frames)
-        time_frames = {"frames": time_frames.unsqueeze(0).permute(0, 2, 1, 3, 4)}
-        preds = self.time_detector(time_frames)
-        preds = torch.sigmoid(preds)
 
-        # duration
-        time_condition = [
-            -1 if preds[0][int(i / (1024 / 10 * duration) * max_frame_nums)] < 0.5 else 1
-            for i in range(int(1024 / 10 * duration))
-        ]
-        time_condition = time_condition + [-1] * (1024 - len(time_condition))
-        # w -> b c h w
-        time_condition = torch.FloatTensor(time_condition).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(1, 1, 256, 1)
+        with torch.no_grad():
+            # run onset detector on CPU to avoid extra GPU usage
+            time_frames = torch.FloatTensor(frames).permute(0, 3, 1, 2)
+            time_frames = video_transform(time_frames)
+            time_frames = {"frames": time_frames.unsqueeze(0).permute(0, 2, 1, 3, 4)}
+            preds = self.time_detector(time_frames)
+            preds = torch.sigmoid(preds)
 
-        # Note that clip need fewer frames
-        frames = frames[::10]
-        images = self.image_processor(images=frames, return_tensors="pt").to(device)
-        image_embeddings = self.image_encoder(**images).image_embeds
-        image_embeddings = torch.mean(image_embeddings, dim=0, keepdim=True).unsqueeze(0).unsqueeze(0)
-        neg_image_embeddings = torch.zeros_like(image_embeddings)
-        image_embeddings = torch.cat([neg_image_embeddings, image_embeddings], dim=1)
-        self.pipeline.set_ip_adapter_scale(ip_adapter_scale)
-        sample = self.pipeline(
-            prompt=prompt_textbox,
-            negative_prompt=negative_prompt_textbox,
-            ip_adapter_image_embeds=image_embeddings,
-            image=time_condition,
-            controlnet_conditioning_scale=float(temporal_scale),
-            num_inference_steps=sample_step_slider,
-            height=256,
-            width=1024,
-            output_type="pt",
-            generator=generator,
-        )
-        name = "output"
-        audio_img = sample.images[0]
-        audio = denormalize_spectrogram(audio_img)
-        audio = self.vocoder.inference(audio, lengths=160000)[0]
-        audio_save_path = osp.join(self.savedir_sample, "audio")
-        os.makedirs(audio_save_path, exist_ok=True)
-        audio = audio[: int(duration * 16000)]
+            # duration
+            time_condition = [
+                -1 if preds[0][int(i / (1024 / 10 * duration) * max_frame_nums)] < 0.5 else 1
+                for i in range(int(1024 / 10 * duration))
+            ]
+            time_condition = time_condition + [-1] * (1024 - len(time_condition))
+            # w -> b c h w
+            time_condition = (
+                torch.FloatTensor(time_condition)
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .repeat(1, 1, 256, 1)
+                .to(device, dtype=torch.float16)
+            )
 
-        save_path = osp.join(audio_save_path, f"{name}.wav")
-        sf.write(save_path, audio, 16000)
+            # Note that clip need fewer frames
+            frames = frames[::10]
+            images = self.image_processor(images=frames, return_tensors="pt").to(device, dtype=torch.float16)
+            image_embeddings = self.image_encoder(**images).image_embeds
+            image_embeddings = torch.mean(image_embeddings, dim=0, keepdim=True).unsqueeze(0).unsqueeze(0)
+            neg_image_embeddings = torch.zeros_like(image_embeddings)
+            image_embeddings = torch.cat([neg_image_embeddings, image_embeddings], dim=1)
+            self.pipeline.set_ip_adapter_scale(ip_adapter_scale)
+            sample = self.pipeline(
+                prompt=prompt_textbox,
+                negative_prompt=negative_prompt_textbox,
+                ip_adapter_image_embeds=image_embeddings,
+                image=time_condition,
+                controlnet_conditioning_scale=float(temporal_scale),
+                num_inference_steps=sample_step_slider,
+                height=256,
+                width=1024,
+                output_type="pt",
+                generator=generator,
+            )
+            name = "output"
+            audio_img = sample.images[0]
+            del sample
+            torch.cuda.empty_cache()
+            audio = denormalize_spectrogram(audio_img)
+            audio = self.vocoder.inference(audio, lengths=160000)[0]
+            audio_save_path = osp.join(self.savedir_sample, "audio")
+            os.makedirs(audio_save_path, exist_ok=True)
+            audio = audio[: int(duration * 16000)].cpu()
 
-        audio = AudioFileClip(osp.join(audio_save_path, f"{name}.wav"))
-        video = VideoFileClip(input_video)
-        audio = audio.subclip(0, duration)
-        video.audio = audio
-        video = video.subclip(0, duration)
-        video.write_videofile(osp.join(self.savedir_sample, f"{name}.mp4"))
-        save_sample_path = os.path.join(self.savedir_sample, f"{name}.mp4")
+            save_path = osp.join(audio_save_path, f"{name}.wav")
+            sf.write(save_path, audio, 16000)
 
+            audio_clip = AudioFileClip(osp.join(audio_save_path, f"{name}.wav"))
+            video = VideoFileClip(input_video)
+            audio_clip = audio_clip.subclip(0, duration)
+            video.audio = audio_clip
+            video = video.subclip(0, duration)
+            video.write_videofile(osp.join(self.savedir_sample, f"{name}.mp4"))
+            save_sample_path = os.path.join(self.savedir_sample, f"{name}.mp4")
+
+        torch.cuda.empty_cache()
         return save_sample_path
 
 

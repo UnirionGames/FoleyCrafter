@@ -39,12 +39,31 @@ def zero_rank_print(s):
 
 def build_foleycrafter(
     pretrained_model_name_or_path: str = "auffusion/auffusion-full-no-adapter",
+    torch_dtype: torch.dtype = torch.float16,
 ) -> StableDiffusionControlNetPipeline:
-    vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
-    unet = af_UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet")
-    scheduler = PNDMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_name_or_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_name_or_path, subfolder="text_encoder")
+    """Build the FoleyCrafter diffusion pipeline.
+
+    Loading the models in half precision dramatically reduces the peak
+    memory usage during inference which helps to avoid CUDA OOM errors on
+    GPUs with ~20GB of memory.  The returned pipeline is also configured
+    with VAE slicing for additional memory savings.
+    """
+
+    vae = AutoencoderKL.from_pretrained(
+        pretrained_model_name_or_path, subfolder="vae", torch_dtype=torch_dtype
+    )
+    unet = af_UNet2DConditionModel.from_pretrained(
+        pretrained_model_name_or_path, subfolder="unet", torch_dtype=torch_dtype
+    )
+    scheduler = PNDMScheduler.from_pretrained(
+        pretrained_model_name_or_path, subfolder="scheduler"
+    )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        pretrained_model_name_or_path, subfolder="tokenizer"
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        pretrained_model_name_or_path, subfolder="text_encoder", torch_dtype=torch_dtype
+    )
 
     controlnet = ControlNetModel.from_unet(unet, conditioning_channels=1)
 
@@ -59,6 +78,11 @@ def build_foleycrafter(
         safety_checker=None,
         requires_safety_checker=False,
     )
+
+    # move all parameters to the requested dtype and enable memory saving
+    # features that keep peak VRAM within 20–21GB
+    pipe.to(dtype=torch_dtype)
+    pipe.vae.enable_slicing()
 
     return pipe
 
