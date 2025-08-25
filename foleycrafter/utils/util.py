@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 import os.path as osp
 import random
@@ -39,12 +40,62 @@ def zero_rank_print(s):
 
 def build_foleycrafter(
     pretrained_model_name_or_path: str = "auffusion/auffusion-full-no-adapter",
+    torch_dtype: torch.dtype = torch.float16,
 ) -> StableDiffusionControlNetPipeline:
-    vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
-    unet = af_UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet")
-    scheduler = PNDMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_name_or_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_name_or_path, subfolder="text_encoder")
+    """Build the FoleyCrafter diffusion pipeline.
+
+    Loading the models in half precision dramatically reduces the peak
+    memory usage during inference which helps to avoid CUDA OOM errors on
+    GPUs with ~20GB of memory.  The returned pipeline is also configured
+    with VAE slicing for additional memory savings.
+    """
+
+    vae = AutoencoderKL.from_pretrained(
+        pretrained_model_name_or_path, subfolder="vae", torch_dtype=torch_dtype
+    )
+
+    # Diffusion checkpoints trained with EMA may store extra optimizer
+    # settings in ``config.json`` that the UNet class doesn't recognize.
+    # If the checkpoint directory is available locally, strip these keys
+    # before loading to avoid noisy warning messages.
+    unet_subfolder = "unet"
+    config_path = os.path.join(pretrained_model_name_or_path, unet_subfolder, "config.json")
+    load_path = pretrained_model_name_or_path
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            unet_config = json.load(f)
+        ema_keys = [
+            "decay",
+            "inv_gamma",
+            "min_decay",
+            "optimization_step",
+            "power",
+            "update_after_step",
+            "use_ema_warmup",
+        ]
+        removed = False
+        for k in ema_keys:
+            if k in unet_config:
+                del unet_config[k]
+                removed = True
+        if removed:
+            with open(config_path, "w") as f:
+                json.dump(unet_config, f, indent=2)
+        load_path = os.path.join(pretrained_model_name_or_path, unet_subfolder)
+        unet = af_UNet2DConditionModel.from_pretrained(load_path, torch_dtype=torch_dtype)
+    else:
+        unet = af_UNet2DConditionModel.from_pretrained(
+            pretrained_model_name_or_path, subfolder=unet_subfolder, torch_dtype=torch_dtype
+        )
+    scheduler = PNDMScheduler.from_pretrained(
+        pretrained_model_name_or_path, subfolder="scheduler"
+    )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        pretrained_model_name_or_path, subfolder="tokenizer"
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        pretrained_model_name_or_path, subfolder="text_encoder", torch_dtype=torch_dtype
+    )
 
     controlnet = ControlNetModel.from_unet(unet, conditioning_channels=1)
 
@@ -59,6 +110,11 @@ def build_foleycrafter(
         safety_checker=None,
         requires_safety_checker=False,
     )
+
+    # move all parameters to the requested dtype and enable memory saving
+    # features that keep peak VRAM within 20–21GB
+    pipe.to(dtype=torch_dtype)
+    pipe.vae.enable_slicing()
 
     return pipe
 
@@ -1690,14 +1746,33 @@ def scale(old_value, old_min, old_max, new_min, new_max):
 
 
 def read_frames_with_moviepy(video_path, max_frame_nums=None):
-    clip = VideoFileClip(video_path)
-    duration = clip.duration
-    frames = []
-    for frame in clip.iter_frames():
-        frames.append(frame)
+    """Read video frames with moviepy and ensure resources are closed.
+
+    Parameters
+    ----------
+    video_path: str
+        Path to the video file.
+    max_frame_nums: int, optional
+        If provided, the video is uniformly sampled to this number of frames.
+
+    Returns
+    -------
+    np.ndarray
+        Array of video frames.
+    float
+        Duration of the video in seconds.
+    """
+
+    with VideoFileClip(video_path) as clip:
+        duration = clip.duration
+        frames = [frame for frame in clip.iter_frames()]
+
+    frames = np.array(frames)
     if max_frame_nums is not None:
         frames_idx = np.linspace(0, len(frames) - 1, max_frame_nums, dtype=int)
-    return np.array(frames)[frames_idx, ...], duration
+        frames = frames[frames_idx, ...]
+
+    return frames, duration
 
 
 def read_frames_with_moviepy_resample(video_path, save_path):
