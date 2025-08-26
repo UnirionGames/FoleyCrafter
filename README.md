@@ -33,12 +33,27 @@ Python >= 3.10
 ### Prepare Environment
 Use the following command to install dependencies:
 ```bash
-# install venv environment
+# create a virtual environment
 python -m venv .venv
-./venv/Scripts/activate
+source .venv/bin/activate   # macOS/Linux
+\.venv\Scripts\activate     # Windows
 
 # install GIT LFS for checkpoints download
 git lfs install
+```
+
+### Install FFmpeg
+`convert_videos.py` relies on an FFmpeg binary. Install one for your platform:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install ffmpeg
+
+# macOS with Homebrew
+brew install ffmpeg
+
+# Windows with winget
+winget install ffmpeg
 ```
 
 ### Download Checkpoints
@@ -69,6 +84,40 @@ Put checkpoints as follows:
     │   │
     └── timestamp_detector.pth.tar
 ```
+
+## Dataset preparation
+
+Place your raw clips in a folder named `clips/` in the project root. Running
+`convert_videos.py` will automatically scan this directory (or a custom
+`--input_dir`) and write the processed dataset into
+`data/AudioSetStrong/train` (or a custom `--output_dir`):
+
+```bash
+# extract frames and log‑mel features for every clip in examples/vggsound
+python convert_videos.py \
+  --input_dir=examples/vggsound \
+  --output_dir=/tmp/sample_dataset
+```
+
+By default the script trims each clip to 150 frames; adjust with `--frames`.
+
+Each clip is trimmed to the first 150 frames, then probed to gather its fps,
+duration, codecs and other metadata. The frames and a log‑mel spectrogram are
+saved under `video/` and `feature/` subfolders so the resulting directory can be
+passed directly to `train_time_detector.py`.
+
+## Training
+
+A lightweight CLI for fine-tuning the time detection module is available:
+
+```bash
+python train_time_detector.py \
+  --data_path=data/AudioSetStrong/train/feature \
+  --video_path=data/AudioSetStrong/train/video \
+  --output_dir=checkpoints/time_detector_finetune
+```
+
+Pass `--resume` with a checkpoint path to continue training from a previous run.
 
 ## Gradio demo
 
