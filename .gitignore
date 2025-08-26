@@ -11,6 +11,10 @@ train/
 configs/
 tmp/
 
+# IDEA
+.idea/
+*.iml
+
 *.wav
 *.mp3
 *.gif

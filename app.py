@@ -39,7 +39,7 @@ css = """
 
 parser = ArgumentParser()
 parser.add_argument("--config", type=str, default="example/config/base.yaml")
-parser.add_argument("--server-name", type=str, default="0.0.0.0")
+parser.add_argument("--server-name", type=str, default="127.0.0.1")
 parser.add_argument("--port", type=int, default=7860)
 parser.add_argument("--share", type=bool, default=False)
 
